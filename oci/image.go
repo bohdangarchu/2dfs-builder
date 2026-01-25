@@ -65,6 +65,13 @@ type containerImage struct {
 	manifests      []v1.Manifest
 	configs        []v1.Image
 	cacheLock      sync.Mutex
+	stargzOptions  StargzOptions
+}
+
+type StargzOptions struct {
+	Enabled       bool
+	ChunkSize     int
+	PrefetchFiles []string
 }
 
 type CacheKeys struct {
@@ -96,6 +103,16 @@ forcepull: force image pull even if local cache entry found
 platforms: array of supported platforms. The resulting image will only include support of those is the original image has it.
 */
 func NewImage(ctx context.Context, url string, forcepull bool, platforms []string) (Image, error) {
+	return NewImageWithOptions(ctx, url, forcepull, platforms, StargzOptions{})
+}
+
+/*
+Get an image online or from cache with stargz options.
+forcepull: force image pull even if local cache entry found
+platforms: array of supported platforms. The resulting image will only include support of those is the original image has it.
+stargzOptions: options for stargz compression
+*/
+func NewImageWithOptions(ctx context.Context, url string, forcepull bool, platforms []string, stargzOptions StargzOptions) (Image, error) {
 
 	ctxIndexPosition := ctx.Value(IndexStoreContextKey)
 	indexStoreLocation := ""
@@ -142,6 +159,7 @@ func NewImage(ctx context.Context, url string, forcepull bool, platforms []strin
 		configs:        []v1.Image{},
 		platforms:      platforms,
 		cacheLock:      sync.Mutex{},
+		stargzOptions:  stargzOptions,
 	}
 
 	err = img.loadIndex(url, ctx)
@@ -821,7 +839,16 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 	return f, nil
 }
 
+// buildAllotment processes a single allotment manifest by creating a compressed TAR archive
+// from the source files and storing it in the blob cache. It calculates file hashes for
+// deduplication and caches the mapping between source file hashes and compressed blob digests
+// in the key digest cache. The resulting allotment with its digest and position is added to
+// the provided field. Compressed blobs are stored in c.blobCache, and file-to-digest mappings
+// are stored in c.keyDigestCache for future cache lookups.
 func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesystem.Field) error {
+
+	var tocDigest string
+	var uncompressedSize int64
 
 	fileSha, err := compress.CalculateMultiSha256Digest(a.Src.List)
 	if err != nil {
@@ -871,51 +898,113 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 
 		log.Printf("File %s [COMPRESSING] \n", a.Src)
 
-		archiveName, err := compress.TarToGz(tarPath)
-		if err != nil {
-			return err
-		}
-		archive, err := os.Open(archiveName)
-		if err != nil {
-			return err
-		}
-		defer archive.Close()
-		defer os.Remove(archiveName)
-		compressedSha = compress.CalculateSha256Digest(archive)
-
-		//add uncompressed allotment cache reference
-		c.cacheLock.Lock()
-		c.upsertCacheKey(fileSha, FileCacheKey{
-			DiffID:        diffID,
-			CompressedSha: compressedSha,
-		}, a.Dst.List)
-		c.cacheLock.Unlock()
-
-		if !c.blobCache.Check(compressedSha) {
-			blobWriter, err := c.blobCache.Add(compressedSha)
+		if c.stargzOptions.Enabled {
+			// Use stargz compression
+			stargzResult, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize, c.stargzOptions.PrefetchFiles)
 			if err != nil {
 				return err
 			}
-			archive.Seek(0, 0)
-			copyBuffer := make([]byte, 1024*1024*100)
-			_, err = io.CopyBuffer(blobWriter, archive, copyBuffer)
-			blobWriter.Close()
-			archive.Close()
+			defer stargzResult.CompressedBlob.Close()
+
+			// Calculate compressed digest and size
+			compressedSha, _, err = compress.CalculateStargzDigest(stargzResult.CompressedBlob)
 			if err != nil {
-				c.blobCache.Del(compressedSha)
 				return err
 			}
-			log.Printf("Alltoment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
+
+			tocDigest = stargzResult.TOCDigest.String()
+			// For uncompressed size, we'll use the original tar size for now
+			tarStat, err := os.Stat(tarPath)
+			if err != nil {
+				return err
+			}
+			uncompressedSize = tarStat.Size()
+
+			// Re-open the stargz blob for storage
+			stargzResult2, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize, c.stargzOptions.PrefetchFiles)
+			if err != nil {
+				return err
+			}
+			defer stargzResult2.CompressedBlob.Close()
+
+			//add stargz allotment cache reference
+			c.cacheLock.Lock()
+			c.upsertCacheKey(fileSha, FileCacheKey{
+				DiffID:        diffID,
+				CompressedSha: compressedSha,
+			}, a.Dst.List)
+			c.cacheLock.Unlock()
+
+			if !c.blobCache.Check(compressedSha) {
+				blobWriter, err := c.blobCache.Add(compressedSha)
+				if err != nil {
+					return err
+				}
+				copyBuffer := make([]byte, 1024*1024*100)
+				_, err = io.CopyBuffer(blobWriter, stargzResult2.CompressedBlob, copyBuffer)
+				blobWriter.Close()
+				if err != nil {
+					c.blobCache.Del(compressedSha)
+					return err
+				}
+				log.Printf("Stargz Allotment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
+			}
+		} else {
+			// Use standard gzip compression
+			archiveName, err := compress.TarToGz(tarPath)
+			if err != nil {
+				return err
+			}
+			archive, err := os.Open(archiveName)
+			if err != nil {
+				return err
+			}
+			defer archive.Close()
+			defer os.Remove(archiveName)
+			compressedSha = compress.CalculateSha256Digest(archive)
+
+			//add uncompressed allotment cache reference
+			c.cacheLock.Lock()
+			c.upsertCacheKey(fileSha, FileCacheKey{
+				DiffID:        diffID,
+				CompressedSha: compressedSha,
+			}, a.Dst.List)
+			c.cacheLock.Unlock()
+
+			if !c.blobCache.Check(compressedSha) {
+				blobWriter, err := c.blobCache.Add(compressedSha)
+				if err != nil {
+					return err
+				}
+				archive.Seek(0, 0)
+				copyBuffer := make([]byte, 1024*1024*100)
+				_, err = io.CopyBuffer(blobWriter, archive, copyBuffer)
+				blobWriter.Close()
+				archive.Close()
+				if err != nil {
+					c.blobCache.Del(compressedSha)
+					return err
+				}
+				log.Printf("Alltoment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
+			}
 		}
 	}
 
-	// add allotments
-	f.AddAllotment(filesystem.Allotment{
+	// add allotments with stargz metadata
+	allotment := filesystem.Allotment{
 		Row:    a.Row,
 		Col:    a.Col,
 		Digest: compressedSha,
 		DiffID: diffID,
-	})
+	}
+
+	if c.stargzOptions.Enabled {
+		allotment.TOCDigest = tocDigest
+		allotment.UncompressedSize = uncompressedSize
+		allotment.IsStargz = true
+	}
+
+	f.AddAllotment(allotment)
 
 	return nil
 }
