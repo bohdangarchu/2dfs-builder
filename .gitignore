@@ -22,3 +22,5 @@ go.work
 
 tdfs
 2dfs-builder
+.idea
+/inputs

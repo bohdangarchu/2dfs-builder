@@ -839,12 +839,8 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 	return f, nil
 }
 
-// buildAllotment processes a single allotment manifest by creating a compressed TAR archive
-// from the source files and storing it in the blob cache. It calculates file hashes for
-// deduplication and caches the mapping between source file hashes and compressed blob digests
-// in the key digest cache. The resulting allotment with its digest and position is added to
-// the provided field. Compressed blobs are stored in c.blobCache, and file-to-digest mappings
-// are stored in c.keyDigestCache for future cache lookups.
+// builds allotment tar, gzips it and stores in./2dfs/blobs. The resulting allotment with its digest and position is added to
+// the provided field. caches the allotment
 func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesystem.Field) error {
 
 	var tocDigest string
@@ -893,12 +889,10 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 		defer tarReader.Close()
 		defer os.Remove(tarPath)
 
-		diffID = compress.CalculateSha256Digest(tarReader)
-		tarReader.Seek(0, 0)
-
 		log.Printf("File %s [COMPRESSING] \n", a.Src)
 
 		if c.stargzOptions.Enabled {
+			log.Printf("use stargz compression\n")
 			// Use stargz compression
 			stargzResult, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize, c.stargzOptions.PrefetchFiles)
 			if err != nil {
@@ -911,6 +905,12 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			if err != nil {
 				return err
 			}
+
+			// Get DiffID from the stargz blob (must be called after blob is fully read)
+			// This is the correct DiffID that matches what the stargz snapshotter will calculate
+			// when decompressing the layer, as estargz adds TOC to the archive
+			diffID = stargzResult.CompressedBlob.DiffID().Encoded()
+			log.Printf("diff id %s\n", diffID)
 
 			tocDigest = stargzResult.TOCDigest.String()
 			// For uncompressed size, we'll use the original tar size for now
@@ -950,6 +950,11 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 				log.Printf("Stargz Allotment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
 			}
 		} else {
+			// For standard gzip, calculate DiffID from the original tar
+			// (unlike stargz, gzip decompression produces the exact same tar)
+			diffID = compress.CalculateSha256Digest(tarReader)
+			tarReader.Seek(0, 0)
+
 			// Use standard gzip compression
 			archiveName, err := compress.TarToGz(tarPath)
 			if err != nil {
