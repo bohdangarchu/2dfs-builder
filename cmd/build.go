@@ -79,7 +79,7 @@ func build(imgFrom string, imgTarget string) error {
 		ChunkSize:     stargzChunkSize,
 		PrefetchFiles: stargzPrefetchFiles,
 	}
-	ociImage, err := oci.NewImageWithOptions(ctx, imgFrom, forcePull, platfrorms, stargzOptions)
+	ociImage, err := oci.NewImageWithStargzOptions(ctx, imgFrom, forcePull, platfrorms, stargzOptions)
 	if err != nil {
 		return err
 	}

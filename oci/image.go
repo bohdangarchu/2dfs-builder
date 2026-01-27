@@ -97,22 +97,11 @@ type Image interface {
 	GetExporter(args ...string) (FieldExporter, error)
 }
 
-/*
-Get an image online or from cache.
-forcepull: force image pull even if local cache entry found
-platforms: array of supported platforms. The resulting image will only include support of those is the original image has it.
-*/
 func NewImage(ctx context.Context, url string, forcepull bool, platforms []string) (Image, error) {
-	return NewImageWithOptions(ctx, url, forcepull, platforms, StargzOptions{})
+	return NewImageWithStargzOptions(ctx, url, forcepull, platforms, StargzOptions{})
 }
 
-/*
-Get an image online or from cache with stargz options.
-forcepull: force image pull even if local cache entry found
-platforms: array of supported platforms. The resulting image will only include support of those is the original image has it.
-stargzOptions: options for stargz compression
-*/
-func NewImageWithOptions(ctx context.Context, url string, forcepull bool, platforms []string, stargzOptions StargzOptions) (Image, error) {
+func NewImageWithStargzOptions(ctx context.Context, url string, forcepull bool, platforms []string, stargzOptions StargzOptions) (Image, error) {
 
 	ctxIndexPosition := ctx.Value(IndexStoreContextKey)
 	indexStoreLocation := ""
@@ -839,8 +828,8 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 	return f, nil
 }
 
-// builds allotment tar, gzips it and stores in./2dfs/blobs. The resulting allotment with its digest and position is added to
-// the provided field. caches the allotment
+// builds allotment tar, gzips it and stores in./2dfs/blobs.
+// The resulting allotment with its digest and position is added to the provided field
 func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesystem.Field) error {
 
 	var tocDigest string
@@ -995,7 +984,6 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 		}
 	}
 
-	// add allotments with stargz metadata
 	allotment := filesystem.Allotment{
 		Row:    a.Row,
 		Col:    a.Col,
