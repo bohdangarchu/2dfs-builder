@@ -14,7 +14,7 @@ type StargzCompressionResult struct {
 	TOCDigest      digest.Digest
 }
 
-func TarToStargz(tarPath string, chunkSize int, prefetchFiles []string) (*StargzCompressionResult, error) {
+func TarToStargz(tarPath string, chunkSize int) (*StargzCompressionResult, error) {
 	tarFile, err := os.Open(tarPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open tar file: %w", err)
@@ -30,10 +30,6 @@ func TarToStargz(tarPath string, chunkSize int, prefetchFiles []string) (*Stargz
 
 	opts := []estargz.Option{
 		estargz.WithChunkSize(chunkSize),
-	}
-
-	if len(prefetchFiles) > 0 {
-		opts = append(opts, estargz.WithPrioritizedFiles(prefetchFiles))
 	}
 
 	blob, err := estargz.Build(sr, opts...)

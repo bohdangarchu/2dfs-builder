@@ -69,9 +69,8 @@ type containerImage struct {
 }
 
 type StargzOptions struct {
-	Enabled       bool
-	ChunkSize     int
-	PrefetchFiles []string
+	Enabled   bool
+	ChunkSize int
 }
 
 type CacheKeys struct {
@@ -883,7 +882,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 		if c.stargzOptions.Enabled {
 			log.Printf("use stargz compression\n")
 			// Use stargz compression
-			stargzResult, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize, c.stargzOptions.PrefetchFiles)
+			stargzResult, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize)
 			if err != nil {
 				return err
 			}
@@ -910,7 +909,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			uncompressedSize = tarStat.Size()
 
 			// Re-open the stargz blob for storage
-			stargzResult2, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize, c.stargzOptions.PrefetchFiles)
+			stargzResult2, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize)
 			if err != nil {
 				return err
 			}
