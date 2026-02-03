@@ -5,15 +5,17 @@ import (
 	"io"
 	"os"
 
-	"github.com/containerd/stargz-snapshotter/estargz"
 	"github.com/opencontainers/go-digest"
 )
 
 type StargzCompressionResult struct {
-	CompressedBlob *estargz.Blob
+	CompressedBlob *StargzBlob
 	TOCDigest      digest.Digest
 }
 
+// TarToStargz converts a tar archive to a stargz blob WITHOUT landmark files.
+// This uses BuildNoLandmarks which produces a valid stargz layer with TOC
+// but excludes .prefetch.landmark and .no.prefetch.landmark files.
 func TarToStargz(tarPath string, chunkSize int) (*StargzCompressionResult, error) {
 	tarFile, err := os.Open(tarPath)
 	if err != nil {
@@ -28,13 +30,13 @@ func TarToStargz(tarPath string, chunkSize int) (*StargzCompressionResult, error
 
 	sr := io.NewSectionReader(tarFile, 0, stat.Size())
 
-	opts := []estargz.Option{
-		estargz.WithChunkSize(chunkSize),
+	opts := []BuildOption{
+		WithBuildChunkSize(chunkSize),
 	}
 
-	blob, err := estargz.Build(sr, opts...)
+	blob, err := BuildNoLandmarks(sr, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build estargz blob: %w", err)
+		return nil, fmt.Errorf("failed to build stargz blob: %w", err)
 	}
 
 	tocDigest := blob.TOCDigest()
