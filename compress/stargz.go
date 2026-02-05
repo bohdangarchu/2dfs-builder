@@ -30,6 +30,7 @@ func TarToStargz(tarPath string, chunkSize int) (*StargzCompressionResult, error
 
 	opts := []estargz.Option{
 		estargz.WithChunkSize(chunkSize),
+		estargz.WithIncludeLandmarks(false),
 	}
 
 	blob, err := estargz.Build(sr, opts...)
