@@ -78,9 +78,11 @@ type CacheKeys struct {
 }
 
 type FileCacheKey struct {
-	Destination   string `json:"destination"`
-	DiffID        string `json:"diffID"`
-	CompressedSha string `json:"compressedSha"`
+	Destination      string `json:"destination"`
+	DiffID           string `json:"diffID"`
+	CompressedSha    string `json:"compressedSha"`
+	TOCDigest        string `json:"tocDigest,omitempty"`
+	UncompressedSize int64  `json:"uncompressedSize,omitempty"`
 }
 
 type partition struct {
@@ -833,7 +835,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 
 	var tocDigest string
 	var uncompressedSize int64
-
+	// digest of all files in src of an allotment
 	fileSha, err := compress.CalculateMultiSha256Digest(a.Src.List)
 	if err != nil {
 		return err
@@ -842,6 +844,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 	compressedSha, diffID := func() (string, string) {
 		c.cacheLock.Lock()
 		defer c.cacheLock.Unlock()
+		// check uncompressed-keys cache if an entry with fileSha exists
 		keyDigestReader, err := c.keyDigestCache.Get(fileSha)
 		// check if item is cached
 		if err == nil {
@@ -850,14 +853,16 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			if err != nil {
 				log.Fatal(err)
 			}
-			diffID, compressedSha, err := GetFileSha(cacheKeys, a.Dst.List)
+			cached, err := GetFileSha(cacheKeys, a.Dst.List)
 			if err == nil {
 				log.Printf("File %s [CACHED] \n", a.Src)
-				return compressedSha, diffID
-			} else {
-				log.Printf("%v", err)
-				log.Printf("File %s no cache entry found \n", a.Src)
+				tocDigest = cached.TOCDigest
+				uncompressedSize = cached.UncompressedSize
+				return cached.CompressedSha, cached.DiffID
 			}
+
+			log.Printf("%v", err)
+			log.Printf("File %s no cache entry found \n", a.Src)
 		}
 		return "", ""
 	}()
@@ -901,6 +906,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			log.Printf("diff id %s\n", diffID)
 
 			tocDigest = stargzResult.TOCDigest.String()
+			log.Printf("tocDigest value: '%s'\n", tocDigest)
 			// For uncompressed size, we'll use the original tar size for now
 			tarStat, err := os.Stat(tarPath)
 			if err != nil {
@@ -918,8 +924,10 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			//add stargz allotment cache reference
 			c.cacheLock.Lock()
 			c.upsertCacheKey(fileSha, FileCacheKey{
-				DiffID:        diffID,
-				CompressedSha: compressedSha,
+				DiffID:           diffID,
+				CompressedSha:    compressedSha,
+				TOCDigest:        tocDigest,
+				UncompressedSize: uncompressedSize,
 			}, a.Dst.List)
 			c.cacheLock.Unlock()
 
@@ -1133,12 +1141,12 @@ func ParseCacheKey(reader io.Reader) (CacheKeys, error) {
 }
 
 // Given the file destination, and the CacheKeys, looks if any of the keys match the destination and returns the key and the sha of the file. Error otherwise.
-func GetFileSha(keys CacheKeys, dst []string) (string, string, error) {
+func GetFileSha(keys CacheKeys, dst []string) (FileCacheKey, error) {
 	destinationStr := strings.Join(dst, ",")
 	for _, key := range keys.Keys {
 		if key.Destination == destinationStr {
-			return key.DiffID, key.CompressedSha, nil
+			return key, nil
 		}
 	}
-	return "", "", fmt.Errorf("file not found in cache")
+	return FileCacheKey{}, fmt.Errorf("file not found in cache")
 }
