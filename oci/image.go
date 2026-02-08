@@ -893,8 +893,16 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			}
 			defer stargzResult.CompressedBlob.Close()
 
-			// Calculate compressed digest and size
-			compressedSha, _, err = compress.CalculateStargzDigest(stargzResult.CompressedBlob)
+			// Write blob to a temp file while computing the compressed digest
+			tmpFile, err := os.CreateTemp("", "stargz-blob-*")
+			if err != nil {
+				return err
+			}
+			tmpPath := tmpFile.Name()
+			defer os.Remove(tmpPath)
+
+			compressedSha, _, err = compress.CalculateStargzDigest(io.TeeReader(stargzResult.CompressedBlob, tmpFile))
+			tmpFile.Close()
 			if err != nil {
 				return err
 			}
@@ -914,13 +922,6 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			}
 			uncompressedSize = tarStat.Size()
 
-			// Re-open the stargz blob for storage
-			stargzResult2, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize)
-			if err != nil {
-				return err
-			}
-			defer stargzResult2.CompressedBlob.Close()
-
 			//add stargz allotment cache reference
 			c.cacheLock.Lock()
 			c.upsertCacheKey(fileSha, FileCacheKey{
@@ -936,8 +937,14 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 				if err != nil {
 					return err
 				}
-				copyBuffer := make([]byte, 1024*1024*100)
-				_, err = io.CopyBuffer(blobWriter, stargzResult2.CompressedBlob, copyBuffer)
+				tmpReader, err := os.Open(tmpPath)
+				if err != nil {
+					blobWriter.Close()
+					return err
+				}
+				copyBuffer := make([]byte, 1024*1024)
+				_, err = io.CopyBuffer(blobWriter, tmpReader, copyBuffer)
+				tmpReader.Close()
 				blobWriter.Close()
 				if err != nil {
 					c.blobCache.Del(compressedSha)
