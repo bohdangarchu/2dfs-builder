@@ -8,7 +8,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/2DFS/2dfs-builder/compress"
 	"github.com/2DFS/2dfs-builder/filesystem"
 	"github.com/2DFS/2dfs-builder/oci"
 	"github.com/spf13/cobra"
@@ -22,7 +21,6 @@ func init() {
 	buildCmd.Flags().StringArrayVarP(&platfrorms, "platforms", "p", []string{}, "Filter the build platoforms. E.g. linux/amd64,linux/arm64. By default all the available platforms are used")
 	buildCmd.Flags().BoolVar(&enableStargz, "enable-stargz", false, "enable stargz compression for allotments")
 	buildCmd.Flags().IntVar(&stargzChunkSize, "stargz-chunk-size", 1024*1024, "chunk size for stargz compression in bytes")
-	buildCmd.Flags().StringVar(&estargzGzipHelper, "estargz-gzip-helper", "", "gzip helper for estargz compression (gzip, pigz)")
 	rootCmd.AddCommand(buildCmd)
 }
 
@@ -33,7 +31,6 @@ var exportFormat string
 var platfrorms []string
 var enableStargz bool
 var stargzChunkSize int
-var estargzGzipHelper string
 var buildCmd = &cobra.Command{
 	Use:   "build [base image] [target image]",
 	Short: "Build a 2dfs field from an oci image link",
@@ -76,9 +73,8 @@ func build(imgFrom string, imgTarget string) error {
 		oci.PullPushProtocol = "http"
 	}
 	stargzOptions := oci.StargzOptions{
-		Enabled:        enableStargz,
-		ChunkSize:      stargzChunkSize,
-		GzipHelperPath: compress.GzipHelperPath(estargzGzipHelper),
+		Enabled:   enableStargz,
+		ChunkSize: stargzChunkSize,
 	}
 	ociImage, err := oci.NewImageWithStargzOptions(ctx, imgFrom, forcePull, platfrorms, stargzOptions)
 	if err != nil {
