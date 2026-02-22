@@ -24,3 +24,7 @@ tdfs
 2dfs-builder
 .idea
 /inputs
+
+
+#Ignore vscode AI rules
+.github/instructions/codacy.instructions.md
