@@ -55,6 +55,8 @@ func DownloadIndex(image OciImageLink) (v1.Index, error) {
 	}
 
 	indexRequest.Header.Add("Authorization", bearer)
+	indexRequest.Header.Add("Accept", v1.MediaTypeImageIndex)
+	indexRequest.Header.Add("Accept", v1.MediaTypeImageManifest)
 
 	//ctx, cancel := context.WithTimeout(indexRequest.Context(), 10*time.Second)
 	//defer cancel()

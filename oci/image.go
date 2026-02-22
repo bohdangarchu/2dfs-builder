@@ -65,6 +65,12 @@ type containerImage struct {
 	manifests      []v1.Manifest
 	configs        []v1.Image
 	cacheLock      sync.Mutex
+	stargzOptions  StargzOptions
+}
+
+type StargzOptions struct {
+	Enabled   bool
+	ChunkSize int
 }
 
 type CacheKeys struct {
@@ -72,9 +78,11 @@ type CacheKeys struct {
 }
 
 type FileCacheKey struct {
-	Destination   string `json:"destination"`
-	DiffID        string `json:"diffID"`
-	CompressedSha string `json:"compressedSha"`
+	Destination      string `json:"destination"`
+	DiffID           string `json:"diffID"`
+	CompressedSha    string `json:"compressedSha"`
+	TOCDigest        string `json:"tocDigest,omitempty"`
+	UncompressedSize int64  `json:"uncompressedSize,omitempty"`
 }
 
 type partition struct {
@@ -90,12 +98,11 @@ type Image interface {
 	GetExporter(args ...string) (FieldExporter, error)
 }
 
-/*
-Get an image online or from cache.
-forcepull: force image pull even if local cache entry found
-platforms: array of supported platforms. The resulting image will only include support of those is the original image has it.
-*/
 func NewImage(ctx context.Context, url string, forcepull bool, platforms []string) (Image, error) {
+	return NewImageWithStargzOptions(ctx, url, forcepull, platforms, StargzOptions{})
+}
+
+func NewImageWithStargzOptions(ctx context.Context, url string, forcepull bool, platforms []string, stargzOptions StargzOptions) (Image, error) {
 
 	ctxIndexPosition := ctx.Value(IndexStoreContextKey)
 	indexStoreLocation := ""
@@ -142,6 +149,7 @@ func NewImage(ctx context.Context, url string, forcepull bool, platforms []strin
 		configs:        []v1.Image{},
 		platforms:      platforms,
 		cacheLock:      sync.Mutex{},
+		stargzOptions:  stargzOptions,
 	}
 
 	err = img.loadIndex(url, ctx)
@@ -821,8 +829,13 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 	return f, nil
 }
 
+// builds allotment tar, gzips it and stores in./2dfs/blobs.
+// The resulting allotment with its digest and position is added to the provided field
 func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesystem.Field) error {
 
+	var tocDigest string
+	var uncompressedSize int64
+	// digest of all files in src of an allotment
 	fileSha, err := compress.CalculateMultiSha256Digest(a.Src.List)
 	if err != nil {
 		return err
@@ -831,6 +844,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 	compressedSha, diffID := func() (string, string) {
 		c.cacheLock.Lock()
 		defer c.cacheLock.Unlock()
+		// check uncompressed-keys cache if an entry with fileSha exists
 		keyDigestReader, err := c.keyDigestCache.Get(fileSha)
 		// check if item is cached
 		if err == nil {
@@ -839,14 +853,16 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			if err != nil {
 				log.Fatal(err)
 			}
-			diffID, compressedSha, err := GetFileSha(cacheKeys, a.Dst.List)
+			cached, err := GetFileSha(cacheKeys, a.Dst.List)
 			if err == nil {
 				log.Printf("File %s [CACHED] \n", a.Src)
-				return compressedSha, diffID
-			} else {
-				log.Printf("%v", err)
-				log.Printf("File %s no cache entry found \n", a.Src)
+				tocDigest = cached.TOCDigest
+				uncompressedSize = cached.UncompressedSize
+				return cached.CompressedSha, cached.DiffID
 			}
+
+			log.Printf("%v", err)
+			log.Printf("File %s no cache entry found \n", a.Src)
 		}
 		return "", ""
 	}()
@@ -866,56 +882,136 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 		defer tarReader.Close()
 		defer os.Remove(tarPath)
 
-		diffID = compress.CalculateSha256Digest(tarReader)
-		tarReader.Seek(0, 0)
-
 		log.Printf("File %s [COMPRESSING] \n", a.Src)
 
-		archiveName, err := compress.TarToGz(tarPath)
-		if err != nil {
-			return err
-		}
-		archive, err := os.Open(archiveName)
-		if err != nil {
-			return err
-		}
-		defer archive.Close()
-		defer os.Remove(archiveName)
-		compressedSha = compress.CalculateSha256Digest(archive)
-
-		//add uncompressed allotment cache reference
-		c.cacheLock.Lock()
-		c.upsertCacheKey(fileSha, FileCacheKey{
-			DiffID:        diffID,
-			CompressedSha: compressedSha,
-		}, a.Dst.List)
-		c.cacheLock.Unlock()
-
-		if !c.blobCache.Check(compressedSha) {
-			blobWriter, err := c.blobCache.Add(compressedSha)
+		if c.stargzOptions.Enabled {
+			log.Printf("use stargz compression\n")
+			// Use stargz compression
+			stargzResult, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize)
 			if err != nil {
 				return err
 			}
-			archive.Seek(0, 0)
-			copyBuffer := make([]byte, 1024*1024*100)
-			_, err = io.CopyBuffer(blobWriter, archive, copyBuffer)
-			blobWriter.Close()
-			archive.Close()
+			defer stargzResult.CompressedBlob.Close()
+
+			// Write blob to a temp file while computing the compressed digest
+			tmpFile, err := os.CreateTemp("", "stargz-blob-*")
 			if err != nil {
-				c.blobCache.Del(compressedSha)
 				return err
 			}
-			log.Printf("Alltoment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
+			tmpPath := tmpFile.Name()
+			defer os.Remove(tmpPath)
+
+			compressedSha, _, err = compress.CalculateStargzDigest(io.TeeReader(stargzResult.CompressedBlob, tmpFile))
+			tmpFile.Close()
+			if err != nil {
+				return err
+			}
+
+			// Get DiffID from the stargz blob (must be called after blob is fully read)
+			// This is the correct DiffID that matches what the stargz snapshotter will calculate
+			// when decompressing the layer, as estargz adds TOC to the archive
+			diffID = stargzResult.CompressedBlob.DiffID().Encoded()
+			log.Printf("diff id %s\n", diffID)
+
+			tocDigest = stargzResult.TOCDigest.String()
+			log.Printf("tocDigest value: '%s'\n", tocDigest)
+			// For uncompressed size, we'll use the original tar size for now
+			tarStat, err := os.Stat(tarPath)
+			if err != nil {
+				return err
+			}
+			uncompressedSize = tarStat.Size()
+
+			//add stargz allotment cache reference
+			c.cacheLock.Lock()
+			c.upsertCacheKey(fileSha, FileCacheKey{
+				DiffID:           diffID,
+				CompressedSha:    compressedSha,
+				TOCDigest:        tocDigest,
+				UncompressedSize: uncompressedSize,
+			}, a.Dst.List)
+			c.cacheLock.Unlock()
+
+			if !c.blobCache.Check(compressedSha) {
+				blobWriter, err := c.blobCache.Add(compressedSha)
+				if err != nil {
+					return err
+				}
+				tmpReader, err := os.Open(tmpPath)
+				if err != nil {
+					blobWriter.Close()
+					return err
+				}
+				copyBuffer := make([]byte, 1024*1024)
+				_, err = io.CopyBuffer(blobWriter, tmpReader, copyBuffer)
+				tmpReader.Close()
+				blobWriter.Close()
+				if err != nil {
+					c.blobCache.Del(compressedSha)
+					return err
+				}
+				log.Printf("Stargz Allotment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
+			}
+		} else {
+			// For standard gzip, calculate DiffID from the original tar
+			// (unlike stargz, gzip decompression produces the exact same tar)
+			diffID = compress.CalculateSha256Digest(tarReader)
+			tarReader.Seek(0, 0)
+
+			// Use standard gzip compression
+			archiveName, err := compress.TarToGz(tarPath)
+			if err != nil {
+				return err
+			}
+			archive, err := os.Open(archiveName)
+			if err != nil {
+				return err
+			}
+			defer archive.Close()
+			defer os.Remove(archiveName)
+			compressedSha = compress.CalculateSha256Digest(archive)
+
+			//add uncompressed allotment cache reference
+			c.cacheLock.Lock()
+			c.upsertCacheKey(fileSha, FileCacheKey{
+				DiffID:        diffID,
+				CompressedSha: compressedSha,
+			}, a.Dst.List)
+			c.cacheLock.Unlock()
+
+			if !c.blobCache.Check(compressedSha) {
+				blobWriter, err := c.blobCache.Add(compressedSha)
+				if err != nil {
+					return err
+				}
+				archive.Seek(0, 0)
+				copyBuffer := make([]byte, 1024*1024)
+				_, err = io.CopyBuffer(blobWriter, archive, copyBuffer)
+				blobWriter.Close()
+				archive.Close()
+				if err != nil {
+					c.blobCache.Del(compressedSha)
+					return err
+				}
+				log.Printf("Alltoment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
+			}
 		}
 	}
 
-	// add allotments
-	f.AddAllotment(filesystem.Allotment{
+	allotment := filesystem.Allotment{
 		Row:    a.Row,
 		Col:    a.Col,
 		Digest: compressedSha,
 		DiffID: diffID,
-	})
+	}
+
+	if c.stargzOptions.Enabled {
+		allotment.TOCDigest = tocDigest
+		allotment.UncompressedSize = uncompressedSize
+		allotment.IsStargz = true
+	}
+
+	f.AddAllotment(allotment)
 
 	return nil
 }
@@ -1052,12 +1148,12 @@ func ParseCacheKey(reader io.Reader) (CacheKeys, error) {
 }
 
 // Given the file destination, and the CacheKeys, looks if any of the keys match the destination and returns the key and the sha of the file. Error otherwise.
-func GetFileSha(keys CacheKeys, dst []string) (string, string, error) {
+func GetFileSha(keys CacheKeys, dst []string) (FileCacheKey, error) {
 	destinationStr := strings.Join(dst, ",")
 	for _, key := range keys.Keys {
 		if key.Destination == destinationStr {
-			return key.DiffID, key.CompressedSha, nil
+			return key, nil
 		}
 	}
-	return "", "", fmt.Errorf("file not found in cache")
+	return FileCacheKey{}, fmt.Errorf("file not found in cache")
 }
