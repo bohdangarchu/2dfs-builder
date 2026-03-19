@@ -16,7 +16,12 @@ var (
 		Long:  `Requires a 2dfs.yaml file in the current directory or a path to a 2dfs.yaml file. Read docs at https://github.com/2DFS/2dfs-builder`,
 	}
 	homeDir, _     = os.UserHomeDir()
-	basePath       = path.Join(homeDir, ".2dfs")
+	basePath       = func() string {
+		if envHome := os.Getenv("TDFS_HOME"); envHome != "" {
+			return envHome
+		}
+		return path.Join(homeDir, ".2dfs")
+	}()
 	BlobStorePath  = path.Join(basePath, "blobs")
 	IndexStorePath = path.Join(basePath, "index")
 	KeysStorePath  = path.Join(basePath, "uncompressed-keys")
