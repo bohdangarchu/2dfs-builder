@@ -895,16 +895,15 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			if err != nil {
 				return err
 			}
-			defer stargzResult.CompressedBlob.Close()
+			defer stargzResult.CompressedReader.Close()
 
 			// Stream blob directly into cache, computing digest in one pass
-			compressedSha, err = c.blobCache.AddFromReader(stargzResult.CompressedBlob)
+			compressedSha, err = c.blobCache.AddFromReader(stargzResult.CompressedReader)
 			if err != nil {
 				return err
 			}
 
-			// DiffID is computed during estargz.Build, available after blob is consumed
-			diffID = stargzResult.CompressedBlob.DiffID().Encoded()
+			diffID = stargzResult.DiffID
 			log.Printf("diff id %s\n", diffID)
 
 			tocDigest = stargzResult.TOCDigest.String()

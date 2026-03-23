@@ -1,6 +1,7 @@
 package compress
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"log"
@@ -12,8 +13,19 @@ import (
 )
 
 type StargzCompressionResult struct {
-	CompressedBlob *estargz.Blob
-	TOCDigest      digest.Digest
+	CompressedReader io.ReadCloser
+	DiffID           string
+	TOCDigest        digest.Digest
+}
+
+type tempFileReadCloser struct {
+	*os.File
+}
+
+func (t *tempFileReadCloser) Close() error {
+	err := t.File.Close()
+	os.Remove(t.File.Name())
+	return err
 }
 
 func TarToStargz(tarPath string, chunkSize int, compressionLevel int) (*StargzCompressionResult, error) {
@@ -43,11 +55,50 @@ func TarToStargz(tarPath string, chunkSize int, compressionLevel int) (*StargzCo
 	}
 	log.Printf("estargz.Build took %s", time.Since(start))
 
-	tocDigest := blob.TOCDigest()
+	// Buffer the blob to a temp file so we can inspect the TOC and still return a reader.
+	// Draining the pipe also finalises the DiffID digest in the background goroutine.
+	tmpFile, err := os.CreateTemp("", "stargz-blob-*")
+	if err != nil {
+		blob.Close()
+		return nil, fmt.Errorf("failed to create temp file: %w", err)
+	}
+	if _, err := io.Copy(tmpFile, blob); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		blob.Close()
+		return nil, fmt.Errorf("failed to buffer stargz blob: %w", err)
+	}
+	// Close blob to clean up estargz temp files; DiffID is valid now that the pipe is drained.
+	diffID := blob.DiffID().Encoded()
+	blob.Close()
+
+	// Parse and print the uncompressed TOC JSON.
+	blobSize, err := tmpFile.Seek(0, io.SeekEnd)
+	if err == nil {
+		if tocOffset, footerSize, err := estargz.OpenFooter(io.NewSectionReader(tmpFile, 0, blobSize)); err == nil {
+			tocSize := blobSize - tocOffset - footerSize
+			tocBytes := make([]byte, tocSize)
+			if _, err := tmpFile.ReadAt(tocBytes, tocOffset); err == nil {
+				d := new(estargz.GzipDecompressor)
+				if tocJSON, err := d.DecompressTOC(bytes.NewReader(tocBytes)); err == nil {
+					defer tocJSON.Close()
+					raw, _ := io.ReadAll(tocJSON)
+					log.Printf("TOC JSON: %s", string(raw))
+				}
+			}
+		}
+	}
+
+	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		return nil, fmt.Errorf("failed to seek temp file: %w", err)
+	}
 
 	return &StargzCompressionResult{
-		CompressedBlob: blob,
-		TOCDigest:      tocDigest,
+		CompressedReader: &tempFileReadCloser{File: tmpFile},
+		DiffID:           diffID,
+		TOCDigest:        blob.TOCDigest(),
 	}, nil
 }
 
