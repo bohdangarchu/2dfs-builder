@@ -26,6 +26,7 @@ func Execute() error {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	rootCmd.PersistentFlags().StringVar(&homeDirFlag, "home-dir", path.Join(homeDir, ".2dfs"), "home directory for tdfs data")
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		log.Printf("TMPDIR=%s", os.TempDir())
 		basePath := homeDirFlag
 		BlobStorePath = path.Join(basePath, "blobs")
 		IndexStorePath = path.Join(basePath, "index")
