@@ -103,12 +103,11 @@ func formatSize(bytes int64) string {
 	if bytes < unit {
 		return fmt.Sprintf("%d B", bytes)
 	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
+	const mb = unit * unit
+	if bytes >= mb {
+		return fmt.Sprintf("%.1f MB", float64(bytes)/float64(mb))
 	}
-	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+	return fmt.Sprintf("%.1f KB", float64(bytes)/float64(unit))
 }
 
 func totalImageSize(idx v1spec.Index, blobCache cache.CacheStore) (int64, error) {
