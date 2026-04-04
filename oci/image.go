@@ -535,9 +535,9 @@ func (c *containerImage) partition() error {
 					return err
 				}
 				fmt.Printf("Partition %s [CREATING]\n", p.Digest)
-				layerMediaType := "application/vnd.oci.image.layer.v1.tar+gzip"
+				layerMediaType := v1.MediaTypeImageLayerGzip
 				if c.stargzOptions.UseZstd {
-					layerMediaType = "application/vnd.oci.image.layer.v1.tar+zstd"
+					layerMediaType = v1.MediaTypeImageLayerZstd
 				}
 				filteredLayers = append(filteredLayers, v1.Descriptor{
 					MediaType: layerMediaType,
@@ -988,7 +988,11 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 	if c.stargzOptions.Enabled {
 		allotment.TOCDigest = tocDigest
 		allotment.UncompressedSize = uncompressedSize
-		allotment.IsStargz = true
+		if c.stargzOptions.UseZstd {
+			allotment.Compression = "zstd"
+		} else {
+			allotment.Compression = "stargz"
+		}
 	}
 
 	f.AddAllotment(allotment)
