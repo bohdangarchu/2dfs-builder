@@ -8,15 +8,22 @@ import (
 	"time"
 
 	"github.com/containerd/stargz-snapshotter/estargz"
+	"github.com/containerd/stargz-snapshotter/estargz/zstdchunked"
+	"github.com/klauspost/compress/zstd"
 	"github.com/opencontainers/go-digest"
 )
+
+type zstdCompression struct {
+	*zstdchunked.Compressor
+	*zstdchunked.Decompressor
+}
 
 type StargzCompressionResult struct {
 	CompressedBlob *estargz.Blob
 	TOCDigest      digest.Digest
 }
 
-func TarToStargz(tarPath string, chunkSize int, compressionLevel int) (*StargzCompressionResult, error) {
+func TarToStargz(tarPath string, chunkSize int, compressionLevel int, useZstd bool) (*StargzCompressionResult, error) {
 	tarFile, err := os.Open(tarPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open tar file: %w", err)
@@ -33,7 +40,14 @@ func TarToStargz(tarPath string, chunkSize int, compressionLevel int) (*StargzCo
 	opts := []estargz.Option{
 		estargz.WithChunkSize(chunkSize),
 		estargz.WithIncludeLandmarks(false),
-		estargz.WithCompressionLevel(compressionLevel),
+	}
+	if useZstd {
+		opts = append(opts, estargz.WithCompression(&zstdCompression{
+			Compressor:   &zstdchunked.Compressor{CompressionLevel: zstd.SpeedFastest},
+			Decompressor: &zstdchunked.Decompressor{},
+		}))
+	} else {
+		opts = append(opts, estargz.WithCompressionLevel(compressionLevel))
 	}
 
 	start := time.Now()

@@ -74,6 +74,7 @@ type StargzOptions struct {
 	ChunkSize        int
 	CompressionLevel int
 	GzipLevel        int
+	UseZstd          bool
 }
 
 type CacheKeys struct {
@@ -534,8 +535,12 @@ func (c *containerImage) partition() error {
 					return err
 				}
 				fmt.Printf("Partition %s [CREATING]\n", p.Digest)
+				layerMediaType := "application/vnd.oci.image.layer.v1.tar+gzip"
+				if c.stargzOptions.UseZstd {
+					layerMediaType = "application/vnd.oci.image.layer.v1.tar+zstd"
+				}
 				filteredLayers = append(filteredLayers, v1.Descriptor{
-					MediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
+					MediaType: layerMediaType,
 					Digest:    digest.Digest(fmt.Sprintf("sha256:%s", p.Digest)),
 					Size:      blobSize,
 				})
@@ -892,7 +897,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 		if c.stargzOptions.Enabled {
 			log.Printf("use stargz compression\n")
 			// Use stargz compression
-			stargzResult, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize, c.stargzOptions.CompressionLevel)
+			stargzResult, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize, c.stargzOptions.CompressionLevel, c.stargzOptions.UseZstd)
 			if err != nil {
 				return err
 			}

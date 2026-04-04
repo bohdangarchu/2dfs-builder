@@ -24,6 +24,7 @@ func init() {
 	buildCmd.Flags().IntVar(&stargzChunkSize, "stargz-chunk-size", 1024*1024, "chunk size for stargz compression in bytes")
 	buildCmd.Flags().IntVar(&stargzCompressionLevel, "stargz-compression-level", gzip.BestSpeed, "gzip compression level for stargz (1=fastest, 9=smallest)")
 	buildCmd.Flags().IntVar(&gzipCompressionLevel, "compression-level", gzip.DefaultCompression, "gzip compression level for standard 2dfs allotments (1=fastest, 9=smallest, -1=default)")
+	buildCmd.Flags().BoolVar(&useZstd, "use-zstd", false, "use zstd:chunked instead of gzip for stargz compression")
 	rootCmd.AddCommand(buildCmd)
 }
 
@@ -36,6 +37,7 @@ var enableStargz bool
 var stargzChunkSize int
 var stargzCompressionLevel int
 var gzipCompressionLevel int
+var useZstd bool
 var buildCmd = &cobra.Command{
 	Use:   "build [base image] [target image]",
 	Short: "Build a 2dfs field from an oci image link",
@@ -82,6 +84,7 @@ func build(imgFrom string, imgTarget string) error {
 		ChunkSize:        stargzChunkSize,
 		CompressionLevel: stargzCompressionLevel,
 		GzipLevel:        gzipCompressionLevel,
+		UseZstd:          useZstd,
 	}
 	ociImage, err := oci.NewImageWithStargzOptions(ctx, imgFrom, forcePull, platfrorms, stargzOptions)
 	if err != nil {
