@@ -274,7 +274,7 @@ func TarFile(src []string, dst []string) (string, error) {
 }
 
 // Applies a gzip compression to a tar file
-func TarToGz(tarFilePath string) (string, error) {
+func TarToGz(tarFilePath string, compressionLevel int) (string, error) {
 
 	// Open the output file for writing in gzip format
 	outFile, err := os.CreateTemp(os.TempDir(), "tar.gz")
@@ -283,7 +283,10 @@ func TarToGz(tarFilePath string) (string, error) {
 	}
 	defer outFile.Close()
 
-	gzipWriter := gzip.NewWriter(outFile)
+	gzipWriter, err := gzip.NewWriterLevel(outFile, compressionLevel)
+	if err != nil {
+		return "", err
+	}
 	defer gzipWriter.Close()
 
 	// Open the tar file

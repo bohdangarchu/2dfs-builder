@@ -73,6 +73,7 @@ type StargzOptions struct {
 	Enabled          bool
 	ChunkSize        int
 	CompressionLevel int
+	GzipLevel        int
 }
 
 type CacheKeys struct {
@@ -933,7 +934,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			tarReader.Seek(0, 0)
 
 			// Use standard gzip compression
-			archiveName, err := compress.TarToGz(tarPath)
+			archiveName, err := compress.TarToGz(tarPath, c.stargzOptions.GzipLevel)
 			if err != nil {
 				return err
 			}
