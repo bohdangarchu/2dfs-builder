@@ -863,7 +863,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			if err != nil {
 				log.Fatal(err)
 			}
-			cached, err := GetFileSha(cacheKeys, a.Dst.List)
+			cached, err := GetFileSha(cacheKeys, a.Dst.List, c.stargzOptions.Enabled)
 			if err == nil {
 				log.Printf("File %s [CACHED] \n", a.Src)
 				tocDigest = cached.TOCDigest
@@ -1131,11 +1131,13 @@ func ParseCacheKey(reader io.Reader) (CacheKeys, error) {
 	return cacheKey, nil
 }
 
-// Given the file destination, and the CacheKeys, looks if any of the keys match the destination and returns the key and the sha of the file. Error otherwise.
-func GetFileSha(keys CacheKeys, dst []string) (FileCacheKey, error) {
+// Given the file destination, the CacheKeys, and whether stargz is enabled,
+// looks if any of the keys match the destination and compression type, and returns the key. Error otherwise.
+func GetFileSha(keys CacheKeys, dst []string, stargzEnabled bool) (FileCacheKey, error) {
 	destinationStr := strings.Join(dst, ",")
 	for _, key := range keys.Keys {
-		if key.Destination == destinationStr {
+		isStargz := key.TOCDigest != ""
+		if key.Destination == destinationStr && isStargz == stargzEnabled {
 			return key, nil
 		}
 	}
