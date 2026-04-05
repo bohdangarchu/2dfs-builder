@@ -82,11 +82,11 @@ type CacheKeys struct {
 }
 
 type FileCacheKey struct {
-	Destination      string `json:"destination"`
-	DiffID           string `json:"diffID"`
-	CompressedSha    string `json:"compressedSha"`
-	TOCDigest        string `json:"tocDigest,omitempty"`
-	UncompressedSize int64  `json:"uncompressedSize,omitempty"`
+	Destination    string `json:"destination"`
+	DiffID         string `json:"diffID"`
+	CompressedSha  string `json:"compressedSha"`
+	TOCDigest      string `json:"tocDigest,omitempty"`
+	CompressedSize int64  `json:"compressedSize,omitempty"`
 }
 
 type partition struct {
@@ -844,7 +844,7 @@ func (c *containerImage) buildFiled(manifest filesystem.TwoDFsManifest) (filesys
 func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesystem.Field) error {
 
 	var tocDigest string
-	var uncompressedSize int64
+	var compressedSize int64
 	// digest of all files in src of an allotment
 	fileSha, err := compress.CalculateMultiSha256Digest(a.Src.List)
 	if err != nil {
@@ -867,7 +867,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			if err == nil {
 				log.Printf("File %s [CACHED] \n", a.Src)
 				tocDigest = cached.TOCDigest
-				uncompressedSize = cached.UncompressedSize
+				compressedSize = cached.CompressedSize
 				return cached.CompressedSha, cached.DiffID
 			}
 
@@ -908,6 +908,10 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			if err != nil {
 				return err
 			}
+			compressedSize, err = c.blobCache.GetSize(compressedSha)
+			if err != nil {
+				return err
+			}
 
 			// DiffID is computed during estargz.Build, available after blob is consumed
 			diffID = stargzResult.CompressedBlob.DiffID().Encoded()
@@ -915,20 +919,14 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 
 			tocDigest = stargzResult.TOCDigest.String()
 			log.Printf("tocDigest value: '%s'\n", tocDigest)
-			// For uncompressed size, we'll use the original tar size for now
-			tarStat, err := os.Stat(tarPath)
-			if err != nil {
-				return err
-			}
-			uncompressedSize = tarStat.Size()
 
 			//add stargz allotment cache reference
 			c.cacheLock.Lock()
 			c.upsertCacheKey(fileSha, FileCacheKey{
-				DiffID:           diffID,
-				CompressedSha:    compressedSha,
-				TOCDigest:        tocDigest,
-				UncompressedSize: uncompressedSize,
+				DiffID:         diffID,
+				CompressedSha:  compressedSha,
+				TOCDigest:      tocDigest,
+				CompressedSize: compressedSize,
 			}, a.Dst.List)
 			c.cacheLock.Unlock()
 			log.Printf("Stargz Allotment %d/%d %s [CREATED] \n", a.Row, a.Col, compressedSha)
@@ -943,6 +941,11 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			if err != nil {
 				return err
 			}
+			archiveStat, err := os.Stat(archiveName)
+			if err != nil {
+				return err
+			}
+			compressedSize = archiveStat.Size()
 			archive, err := os.Open(archiveName)
 			if err != nil {
 				return err
@@ -954,8 +957,9 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 			//add uncompressed allotment cache reference
 			c.cacheLock.Lock()
 			c.upsertCacheKey(fileSha, FileCacheKey{
-				DiffID:        diffID,
-				CompressedSha: compressedSha,
+				DiffID:         diffID,
+				CompressedSha:  compressedSha,
+				CompressedSize: compressedSize,
 			}, a.Dst.List)
 			c.cacheLock.Unlock()
 
@@ -979,15 +983,15 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 	}
 
 	allotment := filesystem.Allotment{
-		Row:    a.Row,
-		Col:    a.Col,
-		Digest: compressedSha,
-		DiffID: diffID,
+		Row:            a.Row,
+		Col:            a.Col,
+		Digest:         compressedSha,
+		DiffID:         diffID,
+		CompressedSize: compressedSize,
 	}
 
 	if c.stargzOptions.Enabled {
 		allotment.TOCDigest = tocDigest
-		allotment.UncompressedSize = uncompressedSize
 		if c.stargzOptions.UseZstd {
 			allotment.Compression = "zstd"
 		} else {
