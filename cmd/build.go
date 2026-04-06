@@ -22,7 +22,7 @@ func init() {
 	buildCmd.Flags().BoolVar(&forceHttp, "force-http", false, "force pull via http")
 	buildCmd.Flags().StringArrayVarP(&platfrorms, "platforms", "p", []string{}, "Filter the build platoforms. E.g. linux/amd64,linux/arm64. By default all the available platforms are used")
 	buildCmd.Flags().BoolVar(&enableStargz, "enable-stargz", false, "enable stargz compression for allotments")
-	buildCmd.Flags().IntVar(&stargzChunkSize, "stargz-chunk-size", 1024*1024, "chunk size for stargz compression in bytes")
+	buildCmd.Flags().IntVar(&stargzChunkSize, "stargz-chunk-size", 4<<20, "chunk size for stargz compression in bytes (default 4MiB matches estargz internal default)")
 	buildCmd.Flags().IntVar(&stargzCompressionLevel, "stargz-compression-level", gzip.BestSpeed, "gzip compression level for stargz (1=fastest, 9=smallest)")
 	buildCmd.Flags().IntVar(&gzipCompressionLevel, "compression-level", gzip.BestSpeed, "gzip compression level for standard 2dfs allotments (1=fastest, 9=smallest, -1=default)")
 	buildCmd.Flags().BoolVar(&useZstd, "use-zstd", false, "use zstd:chunked instead of gzip for stargz compression")
