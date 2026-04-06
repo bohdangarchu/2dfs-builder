@@ -75,6 +75,7 @@ type StargzOptions struct {
 	CompressionLevel int
 	GzipLevel        int
 	UseZstd          bool
+	ZstdLevel        int
 }
 
 type CacheKeys struct {
@@ -897,7 +898,7 @@ func (c *containerImage) buildAllotment(a filesystem.AllotmentManifest, f filesy
 		if c.stargzOptions.Enabled {
 			log.Printf("use stargz compression\n")
 			// Use stargz compression
-			stargzResult, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize, c.stargzOptions.CompressionLevel, c.stargzOptions.UseZstd)
+			stargzResult, err := compress.TarToStargz(tarPath, c.stargzOptions.ChunkSize, c.stargzOptions.CompressionLevel, c.stargzOptions.UseZstd, c.stargzOptions.ZstdLevel)
 			if err != nil {
 				return err
 			}

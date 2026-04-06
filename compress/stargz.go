@@ -23,7 +23,7 @@ type StargzCompressionResult struct {
 	TOCDigest      digest.Digest
 }
 
-func TarToStargz(tarPath string, chunkSize int, compressionLevel int, useZstd bool) (*StargzCompressionResult, error) {
+func TarToStargz(tarPath string, chunkSize int, compressionLevel int, useZstd bool, zstdLevel int) (*StargzCompressionResult, error) {
 	tarFile, err := os.Open(tarPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open tar file: %w", err)
@@ -43,7 +43,7 @@ func TarToStargz(tarPath string, chunkSize int, compressionLevel int, useZstd bo
 	}
 	if useZstd {
 		opts = append(opts, estargz.WithCompression(&zstdCompression{
-			Compressor:   &zstdchunked.Compressor{CompressionLevel: zstd.SpeedFastest},
+			Compressor:   &zstdchunked.Compressor{CompressionLevel: zstd.EncoderLevel(zstdLevel)},
 			Decompressor: &zstdchunked.Decompressor{},
 		}))
 	} else {
